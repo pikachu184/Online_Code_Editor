@@ -8,9 +8,13 @@ import java.io.File;
 import java.io.FileWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class CodeExecutionService {
+
+    private static final long EXECUTION_TIMEOUT_SECONDS = 15;
 
     public CodeResponse executeCode(CodeRequest request) {
 
@@ -25,16 +29,22 @@ public class CodeExecutionService {
 
         Path tempDirectory = null;
 
+        String containerName =
+                "code-runner-" + System.nanoTime();
+
         try {
 
             // Create temporary directory
-            tempDirectory = Files.createTempDirectory("code-runner-");
+            tempDirectory =
+                    Files.createTempDirectory("code-runner-");
 
             // Create Main.java
             File javaFile =
                     tempDirectory.resolve("Main.java").toFile();
 
-            try (FileWriter writer = new FileWriter(javaFile)) {
+            try (FileWriter writer =
+                         new FileWriter(javaFile)) {
+
                 writer.write(request.getCode());
             }
 
@@ -42,12 +52,14 @@ public class CodeExecutionService {
             Process process = new ProcessBuilder(
                     "docker",
                     "run",
+                    "--name", containerName,
                     "--rm",
                     "--network", "none",
                     "--memory", "128m",
                     "--cpus", "0.5",
                     "-v",
-                    tempDirectory.toAbsolutePath() + ":/app",
+                    tempDirectory.toAbsolutePath()
+                            + ":/app",
                     "eclipse-temurin:21-jdk",
                     "sh",
                     "-c",
@@ -56,13 +68,83 @@ public class CodeExecutionService {
                     .redirectErrorStream(true)
                     .start();
 
-            String output =
-                    new String(
-                            process.getInputStream().readAllBytes()
+            /*
+             * Read Docker output asynchronously.
+             * This prevents output reading from blocking
+             * the timeout mechanism.
+             */
+            CompletableFuture<String> outputFuture =
+                    CompletableFuture.supplyAsync(() -> {
+
+                        try {
+
+                            return new String(
+                                    process.getInputStream()
+                                            .readAllBytes()
+                            );
+
+                        } catch (Exception e) {
+
+                            return "";
+                        }
+                    });
+
+            /*
+             * Wait maximum 15 seconds.
+             */
+            boolean finished =
+                    process.waitFor(
+                            EXECUTION_TIMEOUT_SECONDS,
+                            TimeUnit.SECONDS
                     );
 
-            int exitCode = process.waitFor();
+            /*
+             * Execution timeout.
+             */
+            if (!finished) {
 
+                try {
+
+                    Process stopProcess =
+                            new ProcessBuilder(
+                                    "docker",
+                                    "stop",
+                                    "--time", "1",
+                                    containerName
+                            ).start();
+
+                    stopProcess.waitFor(
+                            3,
+                            TimeUnit.SECONDS
+                    );
+
+                } catch (Exception ignored) {
+                }
+
+                process.destroyForcibly();
+
+                return new CodeResponse(
+                        false,
+                        "",
+                        "Execution timed out"
+                );
+            }
+
+            /*
+             * Docker finished normally.
+             */
+            String output =
+                    outputFuture.get(
+                            1,
+                            TimeUnit.SECONDS
+                    );
+
+            int exitCode =
+                    process.exitValue();
+
+            /*
+             * Compilation or runtime error.
+             */
             if (exitCode != 0) {
 
                 return new CodeResponse(
@@ -72,6 +154,9 @@ public class CodeExecutionService {
                 );
             }
 
+            /*
+             * Successful execution.
+             */
             return new CodeResponse(
                     true,
                     output,
@@ -88,21 +173,26 @@ public class CodeExecutionService {
 
         } finally {
 
-            // Delete temporary files
+            /*
+             * Delete temporary files.
+             */
             if (tempDirectory != null) {
 
                 try {
 
                     Files.walk(tempDirectory)
-                            .sorted((a, b) ->
-                                    b.compareTo(a))
+                            .sorted(
+                                    (a, b) ->
+                                            b.compareTo(a)
+                            )
                             .forEach(path -> {
 
                                 try {
+
                                     Files.deleteIfExists(path);
+
                                 } catch (Exception ignored) {
                                 }
-
                             });
 
                 } catch (Exception ignored) {
