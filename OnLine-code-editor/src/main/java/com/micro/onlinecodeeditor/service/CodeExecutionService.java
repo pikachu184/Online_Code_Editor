@@ -16,6 +16,9 @@ public class CodeExecutionService {
 
     private static final long EXECUTION_TIMEOUT_SECONDS = 15;
 
+    private static final String MEMORY_MARKER =
+            "__MEMORY_PEAK__=";
+
     public CodeResponse executeCode(CodeRequest request) {
 
         if (!"java".equalsIgnoreCase(request.getLanguage())) {
@@ -23,7 +26,8 @@ public class CodeExecutionService {
             return new CodeResponse(
                     false,
                     "",
-                    "Currently only Java is supported."
+                    "Currently only Java is supported.",
+                    null
             );
         }
 
@@ -48,7 +52,15 @@ public class CodeExecutionService {
                 writer.write(request.getCode());
             }
 
-            // Run Docker
+            /*
+             * Run Docker.
+             *
+             * memory.peak contains the maximum memory used
+             * by the container in bytes.
+             *
+             * We print it using a special marker so that
+             * it can be separated from the program output.
+             */
             Process process = new ProcessBuilder(
                     "docker",
                     "run",
@@ -63,7 +75,12 @@ public class CodeExecutionService {
                     "eclipse-temurin:21-jdk",
                     "sh",
                     "-c",
-                    "cd /app && javac Main.java && java Main"
+                    "cd /app && " +
+                    "(javac Main.java && java Main); " +
+                    "exit_code=$?; " +
+                    "memory_peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo 0); " +
+                    "echo '" + MEMORY_MARKER + "'$memory_peak; " +
+                    "exit $exit_code"
             )
                     .redirectErrorStream(true)
                     .start();
@@ -126,18 +143,31 @@ public class CodeExecutionService {
                 return new CodeResponse(
                         false,
                         "",
-                        "Execution timed out"
+                        "Execution timed out",
+                        null
                 );
             }
 
             /*
              * Docker finished normally.
              */
-            String output =
+            String rawOutput =
                     outputFuture.get(
                             1,
                             TimeUnit.SECONDS
                     );
+
+            /*
+             * Extract memory usage from Docker output.
+             */
+            String memoryUsed =
+                    extractMemoryUsage(rawOutput);
+
+            /*
+             * Remove memory marker from actual program output.
+             */
+            String output =
+                    removeMemoryMarker(rawOutput);
 
             int exitCode =
                     process.exitValue();
@@ -150,7 +180,8 @@ public class CodeExecutionService {
                 return new CodeResponse(
                         false,
                         "",
-                        output
+                        output,
+                        memoryUsed
                 );
             }
 
@@ -160,7 +191,8 @@ public class CodeExecutionService {
             return new CodeResponse(
                     true,
                     output,
-                    null
+                    null,
+                    memoryUsed
             );
 
         } catch (Exception e) {
@@ -168,7 +200,8 @@ public class CodeExecutionService {
             return new CodeResponse(
                     false,
                     "",
-                    e.getMessage()
+                    e.getMessage(),
+                    null
             );
 
         } finally {
@@ -199,5 +232,65 @@ public class CodeExecutionService {
                 }
             }
         }
+    }
+
+    /*
+     * Extract peak memory from the special marker.
+     */
+    private String extractMemoryUsage(String output) {
+
+        if (output == null) {
+            return null;
+        }
+
+        int markerIndex =
+                output.lastIndexOf(MEMORY_MARKER);
+
+        if (markerIndex == -1) {
+            return null;
+        }
+
+        String memoryValue =
+                output.substring(
+                        markerIndex + MEMORY_MARKER.length()
+                ).trim();
+
+        try {
+
+            long memoryBytes =
+                    Long.parseLong(memoryValue);
+
+            long memoryMb =
+                    (memoryBytes + (1024 * 1024 - 1))
+                            / (1024 * 1024);
+
+            return memoryMb + " MB";
+
+        } catch (NumberFormatException e) {
+
+            return null;
+        }
+    }
+
+    /*
+     * Remove the memory marker from the user's
+     * actual program output.
+     */
+    private String removeMemoryMarker(String output) {
+
+        if (output == null) {
+            return "";
+        }
+
+        int markerIndex =
+                output.lastIndexOf(MEMORY_MARKER);
+
+        if (markerIndex == -1) {
+            return output;
+        }
+
+        return output
+                .substring(0, markerIndex)
+                .trim();
     }
 }
