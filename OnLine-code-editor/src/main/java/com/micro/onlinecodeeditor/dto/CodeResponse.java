@@ -6,26 +6,39 @@ public class CodeResponse {
     private String output;
     private String error;
     private String memoryUsed;
+    private String executionTime;
 
     public CodeResponse() {
     }
 
     // Existing constructor - keep it for compatibility
     public CodeResponse(boolean success, String output, String error) {
-        this(success, output, error, null);
+        this(success, output, error, null, null);
     }
 
-    // New constructor with memory usage
+    // Existing constructor with memory usage - keep it for compatibility
     public CodeResponse(
             boolean success,
             String output,
             String error,
             String memoryUsed
     ) {
+        this(success, output, error, memoryUsed, null);
+    }
+
+    // New constructor with memory usage and execution time
+    public CodeResponse(
+            boolean success,
+            String output,
+            String error,
+            String memoryUsed,
+            String executionTime
+    ) {
         this.success = success;
         this.output = output;
         this.error = error;
         this.memoryUsed = memoryUsed;
+        this.executionTime = executionTime;
     }
 
     public boolean isSuccess() {
@@ -42,5 +55,9 @@ public class CodeResponse {
 
     public String getMemoryUsed() {
         return memoryUsed;
+    }
+
+    public String getExecutionTime() {
+        return executionTime;
     }
 }
