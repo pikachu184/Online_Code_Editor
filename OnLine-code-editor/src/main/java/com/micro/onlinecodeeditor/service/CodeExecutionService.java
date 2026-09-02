@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class CodeExecutionService {
 
-    private static final long EXECUTION_TIMEOUT_SECONDS = 15;
+    private static final long EXECUTION_TIMEOUT_SECONDS = 90;
 
     private static final String MEMORY_MARKER =
             "__MEMORY_PEAK__=";
@@ -27,6 +27,7 @@ public class CodeExecutionService {
                     false,
                     "",
                     "Currently only Java is supported.",
+                    null,
                     null
             );
         }
@@ -53,13 +54,16 @@ public class CodeExecutionService {
             }
 
             /*
+             * Start measuring the execution time
+             * immediately before starting Docker.
+             */
+            long startTime = System.nanoTime();
+
+            /*
              * Run Docker.
              *
-             * memory.peak contains the maximum memory used
-             * by the container in bytes.
-             *
-             * We print it using a special marker so that
-             * it can be separated from the program output.
+             * Existing security and resource settings
+             * remain unchanged.
              */
             Process process = new ProcessBuilder(
                     "docker",
@@ -144,13 +148,25 @@ public class CodeExecutionService {
                         false,
                         "",
                         "Execution timed out",
-                        null
+                        null,
+                        ">90 sec"
                 );
             }
 
             /*
              * Docker finished normally.
              */
+            long endTime = System.nanoTime();
+
+            double executionSeconds =
+                    (endTime - startTime) / 1_000_000_000.0;
+
+            String executionTime =
+                    String.format(
+                            "%.3f sec",
+                            executionSeconds
+                    );
+
             String rawOutput =
                     outputFuture.get(
                             1,
@@ -181,7 +197,8 @@ public class CodeExecutionService {
                         false,
                         "",
                         output,
-                        memoryUsed
+                        memoryUsed,
+                        executionTime
                 );
             }
 
@@ -192,7 +209,8 @@ public class CodeExecutionService {
                     true,
                     output,
                     null,
-                    memoryUsed
+                    memoryUsed,
+                    executionTime
             );
 
         } catch (Exception e) {
@@ -201,6 +219,7 @@ public class CodeExecutionService {
                     false,
                     "",
                     e.getMessage(),
+                    null,
                     null
             );
 
